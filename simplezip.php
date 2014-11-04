@@ -190,15 +190,23 @@ class SimpleZip {
     /**
     * Create ZIP archive
     *
-    * @param mixed $target путь к zip-файлу или FALSE для выдачи в stdout
-    * @param mixed $files ключ - имя в архиве, значение -- исходный файл или array(fn, mtime, method, info)
-    * @param mixed $opts array(info, method)
+    * @param mixed $target zip file path or FALSE for stdout
+    * @param mixed $files key -- archive file name, value -- source file or array(src => source file, time => file modification unix timestamp, method => compression method, info => file comment)
+    * @param mixed $opts array(info => archive comment, method => global compression method)
     * @param mixed $error
     */
     public static function create($target, $files = array(), $opts = array(), &$error = false) {
         $error = false;
         $files_list = array(); // prepared files metadata
+        $opts = array(
+            'info' => (string)$opts['info'] ?: '',
+            'method' => (int)$opts['method'] ?: self::CM_DEFAULT,
+        );
         do {
+            if (!isset(self::$methods[$opts['method']])) {
+                $error = "Method $opts[method] compression is not supported";
+                break;
+            }
             if ($target === false) {
                 $f = STDOUT;
             } elseif (!($f = fopen($target, 'wb'))) {
@@ -217,7 +225,7 @@ class SimpleZip {
                 'cdlen'     => 0,
                 'cdstart'   => 0,
                 'infolen'   => strlen($opts['info']),
-                'info'      => iconv('utf8', 'CP866', (string)$opts['info']),
+                'info'      => iconv('utf8', 'CP866', $opts['info']),
             );
             // check and lock files first
             foreach ($files as $name => $file) {
@@ -225,28 +233,29 @@ class SimpleZip {
                 $file['fn'] = $name;
                 if (!($file['f'] = fopen($file['src'], 'rb'))) {
                     $error = "Unable to open file $file[src]";
-                    break;
+                    break 2;
                 }
                 if (!flock($file['f'], LOCK_SH)) {
                     $error = "Unable to lock file $file[src]";
-                    break;
+                    break 2;
                 }
                 $file['time'] = isset($file['time']) ? $file['time'] : filemtime($file['src']);
-                $file['size'] = filesize($file['src']);
+                $file['method'] = (int)$file['method'] ?: $opts['method'];
+                if ($file['method'] !== self::CM_STORE && !isset(self::$methods[$file['method']])) {
+                    $error = "Method $file[method] compression is not supported";
+                    break 2;
+                }
                 $files_list[] = $file;
             }
             foreach ($files_list as $file) {
-                //$fn = iconv('utf8', 'CP866', $name);
-                $method = $opts['method'] ?: self::CM_DEFAULT;
                 $vermin = self::FT_DEFAULT;
-
                 $LH_pos = $pos; // position to save in Central Directory
                 // prepare and write local header for this file
                 $LH = array(
                     'sig'       => self::SIG_LH,
                     'vermin'    => $vermin,
                     'flags'     => self::FL_UTF8 | self::FL_ONEPASS,
-                    'method'    => $method,
+                    'method'    => $file['method'],
                     'mtime'     => self::dostime($file['time']),
                     'mdate'     => self::dosdate($file['time']),
                     'crc32'     => 0, // will save this later in Data Descriptor
@@ -254,7 +263,7 @@ class SimpleZip {
                     'usize'     => 0, // and this
                     'fnlen'     => strlen($file['fn']),
                     'extralen'  => 0,
-                    'fn'        => $file['fn'],
+                    'fn'        => $file['fn'], // CP866 if FL_UTF8 if not set
                     'extra'     => '',
                 );
                 $LH_buf = '';
@@ -271,13 +280,9 @@ class SimpleZip {
                     $usize += strlen($data);
                 });
                 $filter_compress = false;
-                if ($method !== self::CM_STORE) {
-                    if (!isset(self::$methods[$method])) {
-                        $error = "Method $method compression is not supported";
-                        break;
-                    }
+                if ($file['method'] !== self::CM_STORE) {
                     // this stream filter will do the compressing job according to method selected
-                    $filter_compress = stream_filter_append($file['f'], self::$methods[$method][0], STREAM_FILTER_READ);
+                    $filter_compress = stream_filter_append($file['f'], self::$methods[$file['method']][0], STREAM_FILTER_READ);
                 }
                 while (($data = fread($file['f'], 8192))) $csize += fwrite($f, $data); // pass the data through counter and (optional) compression stream filters
                 if ($filter_compress) stream_filter_remove($filter_compress); // remove compression filter
