@@ -92,7 +92,7 @@ class SimpleZip {
     const VER_OSX       = 19; //!< OS X (Darwin)
 
     // When using ZIP64 extensions, the corresponding value in the zip64 end of central directory record MUST also be set. This field should be set appropriately to indicate whether Version 1 or Version 2 format is in use.
-    const FT_DEFAULT    = 10; //!< Default value
+    const FT_DEFAULT    = 21; //!< Default value
     const FT_VLABEL     = 11; //!< File is a volume label
     const FT_FOLDER     = 20; //!< File is a folder (directory)
     const FT_DEFLATE    = 20; //!< File is compressed using Deflate compression
@@ -203,7 +203,7 @@ class SimpleZip {
             'method' => (int)$opts['method'] ?: self::CM_DEFAULT,
         );
         do {
-            if (!isset(self::$methods[$opts['method']])) {
+            if ($opts['method'] !== self::CM_STORE && !isset(self::$methods[$opts['method']])) {
                 $error = "Method $opts[method] compression is not supported";
                 break;
             }
@@ -284,7 +284,7 @@ class SimpleZip {
                     // this stream filter will do the compressing job according to method selected
                     $filter_compress = stream_filter_append($file['f'], self::$methods[$file['method']][0], STREAM_FILTER_READ);
                 }
-                while (($data = fread($file['f'], 8192))) $csize += fwrite($f, $data); // pass the data through counter and (optional) compression stream filters
+                while (($data = fread($file['f'], SIMPLEZIP_CHUNKSIZE))) $csize += fwrite($f, $data); // pass the data through counter and (optional) compression stream filters
                 if ($filter_compress) stream_filter_remove($filter_compress); // remove compression filter
                 stream_filter_remove($filter_passthru);
                 $crc32 = hexdec(hash_final($hash_ctx)); // finalize hash //TODO check 32-bit PHP
@@ -367,4 +367,5 @@ class SimpleZip_passthru extends php_user_filter {
 }
 
 if (!defined('SIMPLEZIP_PTF')) define('SIMPLEZIP_PTF', 'simplezip.passthru');
+if (!defined('SIMPLEZIP_CHUNKSIZE')) define('SIMPLEZIP_CHUNKSIZE', 1024 * 1024); // 1M
 stream_filter_register(SIMPLEZIP_PTF, 'SimpleZip_passthru');
